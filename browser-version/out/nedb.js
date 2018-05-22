@@ -790,7 +790,7 @@ var model = require('./model')
  * Create a new cursor for this collection
  * @param {Datastore} db - The datastore this cursor is bound to
  * @param {Query} query - The query this cursor will operate on
- * @param {Function} execDn - Handler to be executed after cursor has found the results and before the callback passed to find/findOne/update/remove
+ * @param {Function} execFn - Handler to be executed after cursor has found the results and before the callback passed to find/findOne/update/remove
  */
 function Cursor (db, query, execFn) {
   this.db = db;
@@ -862,7 +862,19 @@ Cursor.prototype.project = function (candidates) {
 
   // Do the actual projection
   candidates.forEach(function (candidate) {
-    var toPush = action === 1 ? _.pick(candidate, keys) : _.omit(candidate, keys);
+    var toPush;
+    if (action === 1) {   // pick-type projection
+      toPush = { $set: {} };
+      keys.forEach(function (k) {
+        toPush.$set[k] = model.getDotValue(candidate, k);
+        if (toPush.$set[k] === undefined) { delete toPush.$set[k]; }
+      });
+      toPush = model.modify({}, toPush);
+    } else {   // omit-type projection
+      toPush = { $unset: {} };
+      keys.forEach(function (k) { toPush.$unset[k] = true });
+      toPush = model.modify(candidate, toPush);
+    }
     if (keepId) {
       toPush._id = candidate._id;
     } else {
@@ -882,76 +894,83 @@ Cursor.prototype.project = function (candidates) {
  *
  * @param {Function} callback - Signature: err, results
  */
-Cursor.prototype._exec = function(callback) {
-  var candidates = this.db.getCandidates(this.query)
-    , res = [], added = 0, skipped = 0, self = this
+Cursor.prototype._exec = function(_callback) {
+  var res = [], added = 0, skipped = 0, self = this
     , error = null
     , i, keys, key
     ;
 
-  try {
-    for (i = 0; i < candidates.length; i += 1) {
-      if (model.match(candidates[i], this.query)) {
-        // If a sort is defined, wait for the results to be sorted before applying limit and skip
-        if (!this._sort) {
-          if (this._skip && this._skip > skipped) {
-            skipped += 1;
+  function callback (error, res) {
+    if (self.execFn) {
+      return self.execFn(error, res, _callback);
+    } else {
+      return _callback(error, res);
+    }
+  }
+
+  this.db.getCandidates(this.query, function (err, candidates) {
+    if (err) { return callback(err); }
+
+    try {
+      for (i = 0; i < candidates.length; i += 1) {
+        if (model.match(candidates[i], self.query)) {
+          // If a sort is defined, wait for the results to be sorted before applying limit and skip
+          if (!self._sort) {
+            if (self._skip && self._skip > skipped) {
+              skipped += 1;
+            } else {
+              res.push(candidates[i]);
+              added += 1;
+              if (self._limit && self._limit <= added) { break; }
+            }
           } else {
             res.push(candidates[i]);
-            added += 1;
-            if (this._limit && this._limit <= added) { break; }
           }
-        } else {
-          res.push(candidates[i]);
         }
       }
+    } catch (err) {
+      return callback(err);
     }
-  } catch (err) {
-    return callback(err);
-  }
 
-  // Apply all sorts
-  if (this._sort) {
-    keys = Object.keys(this._sort);
+    // Apply all sorts
+    if (self._sort) {
+      keys = Object.keys(self._sort);
 
-    // Sorting
-    var criteria = [];
-    for (i = 0; i < keys.length; i++) {
-      key = keys[i];
-      criteria.push({ key: key, direction: self._sort[key] });
-    }
-    res.sort(function(a, b) {
-      var criterion, compare, i;
-      for (i = 0; i < criteria.length; i++) {
-        criterion = criteria[i];
-        compare = criterion.direction * model.compareThings(model.getDotValue(a, criterion.key), model.getDotValue(b, criterion.key));
-        if (compare !== 0) {
-          return compare;
-        }
+      // Sorting
+      var criteria = [];
+      for (i = 0; i < keys.length; i++) {
+        key = keys[i];
+        criteria.push({ key: key, direction: self._sort[key] });
       }
-      return 0;
-    });
+      res.sort(function(a, b) {
+        var criterion, compare, i;
+        for (i = 0; i < criteria.length; i++) {
+          criterion = criteria[i];
+          compare = criterion.direction * model.compareThings(model.getDotValue(a, criterion.key), model.getDotValue(b, criterion.key), self.db.compareStrings);
+          if (compare !== 0) {
+            return compare;
+          }
+        }
+        return 0;
+      });
 
-    // Applying limit and skip
-    var limit = this._limit || res.length
-      , skip = this._skip || 0;
+      // Applying limit and skip
+      var limit = self._limit || res.length
+        , skip = self._skip || 0;
 
-    res = res.slice(skip, skip + limit);
-  }
+      res = res.slice(skip, skip + limit);
+    }
 
-  // Apply projection
-  try {
-    res = this.project(res);
-  } catch (e) {
-    error = e;
-    res = undefined;
-  }
+    // Apply projection
+    try {
+      res = self.project(res);
+    } catch (e) {
+      error = e;
+      res = undefined;
+    }
 
-  if (this.execFn) {
-    return this.execFn(error, res, callback);
-  } else {
     return callback(error, res);
-  }
+  });
 };
 
 Cursor.prototype.exec = function () {
@@ -1067,6 +1086,10 @@ var customUtils = require('./customUtils')
  * @param {Function} options.onload Optional, if autoload is used this will be called after the load database with the error object as parameter. If you don't pass it the error will be thrown
  * @param {Function} options.afterSerialization/options.beforeDeserialization Optional, serialization hooks
  * @param {Number} options.corruptAlertThreshold Optional, threshold after which an alert is thrown if too much data is corrupt
+ * @param {Function} options.compareStrings Optional, string comparison function that overrides default for sorting
+ *
+ * Event Emitter - Events
+ * * compaction.done - Fired whenever a compaction operation was finished
  */
 function Datastore (options) {
   var filename;
@@ -1091,6 +1114,9 @@ function Datastore (options) {
     this.filename = filename;
   }
 
+  // String comparison function
+  this.compareStrings = options.compareStrings;
+
   // Persistence handling
   this.persistence = new Persistence({ db: this, nodeWebkitAppName: options.nodeWebkitAppName
                                       , afterSerialization: options.afterSerialization
@@ -1108,6 +1134,7 @@ function Datastore (options) {
   // binary is always well-balanced
   this.indexes = {};
   this.indexes._id = new Index({ fieldName: '_id', unique: true });
+  this.ttlIndexes = {};
 
   // Queue a load of the database right away and call the onload handler
   // By default (no onload handler), if there is an error there, no operation will be possible so warn the user by throwing an exception
@@ -1115,6 +1142,8 @@ function Datastore (options) {
     if (err) { throw err; }
   }); }
 }
+
+util.inherits(Datastore, require('events').EventEmitter);
 
 
 /**
@@ -1152,6 +1181,7 @@ Datastore.prototype.resetIndexes = function (newData) {
  * @param {String} options.fieldName
  * @param {Boolean} options.unique
  * @param {Boolean} options.sparse
+ * @param {Number} options.expireAfterSeconds - Optional, if set this index becomes a TTL index (only works on Date fields, not arrays of Date)
  * @param {Function} cb Optional callback, signature: err
  */
 Datastore.prototype.ensureIndex = function (options, cb) {
@@ -1168,6 +1198,7 @@ Datastore.prototype.ensureIndex = function (options, cb) {
   if (this.indexes[options.fieldName]) { return callback(null); }
 
   this.indexes[options.fieldName] = new Index(options);
+  if (options.expireAfterSeconds !== undefined) { this.ttlIndexes[options.fieldName] = options.expireAfterSeconds; }   // With this implementation index creation is not necessary to ensure TTL but we stick with MongoDB's API here
 
   try {
     this.indexes[options.fieldName].insert(this.getAllData());
@@ -1280,50 +1311,90 @@ Datastore.prototype.updateIndexes = function (oldDoc, newDoc) {
  * One way to make it better would be to enable the use of multiple indexes if the first usable index
  * returns too much data. I may do it in the future.
  *
- * TODO: needs to be moved to the Cursor module
+ * Returned candidates will be scanned to find and remove all expired documents
+ *
+ * @param {Query} query
+ * @param {Boolean} dontExpireStaleDocs Optional, defaults to false, if true don't remove stale docs. Useful for the remove function which shouldn't be impacted by expirations
+ * @param {Function} callback Signature err, candidates
  */
-Datastore.prototype.getCandidates = function (query) {
+Datastore.prototype.getCandidates = function (query, dontExpireStaleDocs, callback) {
   var indexNames = Object.keys(this.indexes)
+    , self = this
     , usableQueryKeys;
 
-  // For a basic match
-  usableQueryKeys = [];
-  Object.keys(query).forEach(function (k) {
-    if (typeof query[k] === 'string' || typeof query[k] === 'number' || typeof query[k] === 'boolean' || util.isDate(query[k]) || query[k] === null) {
-      usableQueryKeys.push(k);
-    }
-  });
-  usableQueryKeys = _.intersection(usableQueryKeys, indexNames);
-  if (usableQueryKeys.length > 0) {
-    return this.indexes[usableQueryKeys[0]].getMatching(query[usableQueryKeys[0]]);
+  if (typeof dontExpireStaleDocs === 'function') {
+    callback = dontExpireStaleDocs;
+    dontExpireStaleDocs = false;
   }
 
-  // For a $in match
-  usableQueryKeys = [];
-  Object.keys(query).forEach(function (k) {
-    if (query[k] && query[k].hasOwnProperty('$in')) {
-      usableQueryKeys.push(k);
-    }
-  });
-  usableQueryKeys = _.intersection(usableQueryKeys, indexNames);
-  if (usableQueryKeys.length > 0) {
-    return this.indexes[usableQueryKeys[0]].getMatching(query[usableQueryKeys[0]].$in);
-  }
 
-  // For a comparison match
-  usableQueryKeys = [];
-  Object.keys(query).forEach(function (k) {
-    if (query[k] && (query[k].hasOwnProperty('$lt') || query[k].hasOwnProperty('$lte') || query[k].hasOwnProperty('$gt') || query[k].hasOwnProperty('$gte'))) {
-      usableQueryKeys.push(k);
+  async.waterfall([
+  // STEP 1: get candidates list by checking indexes from most to least frequent usecase
+  function (cb) {
+    // For a basic match
+    usableQueryKeys = [];
+    Object.keys(query).forEach(function (k) {
+      if (typeof query[k] === 'string' || typeof query[k] === 'number' || typeof query[k] === 'boolean' || util.isDate(query[k]) || query[k] === null) {
+        usableQueryKeys.push(k);
+      }
+    });
+    usableQueryKeys = _.intersection(usableQueryKeys, indexNames);
+    if (usableQueryKeys.length > 0) {
+      return cb(null, self.indexes[usableQueryKeys[0]].getMatching(query[usableQueryKeys[0]]));
     }
-  });
-  usableQueryKeys = _.intersection(usableQueryKeys, indexNames);
-  if (usableQueryKeys.length > 0) {
-    return this.indexes[usableQueryKeys[0]].getBetweenBounds(query[usableQueryKeys[0]]);
-  }
 
-  // By default, return all the DB data
-  return this.getAllData();
+    // For a $in match
+    usableQueryKeys = [];
+    Object.keys(query).forEach(function (k) {
+      if (query[k] && query[k].hasOwnProperty('$in')) {
+        usableQueryKeys.push(k);
+      }
+    });
+    usableQueryKeys = _.intersection(usableQueryKeys, indexNames);
+    if (usableQueryKeys.length > 0) {
+      return cb(null, self.indexes[usableQueryKeys[0]].getMatching(query[usableQueryKeys[0]].$in));
+    }
+
+    // For a comparison match
+    usableQueryKeys = [];
+    Object.keys(query).forEach(function (k) {
+      if (query[k] && (query[k].hasOwnProperty('$lt') || query[k].hasOwnProperty('$lte') || query[k].hasOwnProperty('$gt') || query[k].hasOwnProperty('$gte'))) {
+        usableQueryKeys.push(k);
+      }
+    });
+    usableQueryKeys = _.intersection(usableQueryKeys, indexNames);
+    if (usableQueryKeys.length > 0) {
+      return cb(null, self.indexes[usableQueryKeys[0]].getBetweenBounds(query[usableQueryKeys[0]]));
+    }
+
+    // By default, return all the DB data
+    return cb(null, self.getAllData());
+  }
+  // STEP 2: remove all expired documents
+  , function (docs) {
+    if (dontExpireStaleDocs) { return callback(null, docs); }
+
+    var expiredDocsIds = [], validDocs = [], ttlIndexesFieldNames = Object.keys(self.ttlIndexes);
+
+    docs.forEach(function (doc) {
+      var valid = true;
+      ttlIndexesFieldNames.forEach(function (i) {
+        if (doc[i] !== undefined && util.isDate(doc[i]) && Date.now() > doc[i].getTime() + self.ttlIndexes[i] * 1000) {
+          valid = false;
+        }
+      });
+      if (valid) { validDocs.push(doc); } else { expiredDocsIds.push(doc._id); }
+    });
+
+    async.eachSeries(expiredDocsIds, function (_id, cb) {
+      self._remove({ _id: _id }, {}, function (err) {
+        if (err) { return callback(err); }
+        return cb();
+      });
+    }, function (err) {
+      return callback(null, validDocs);
+    });
+  }]);
 };
 
 
@@ -1533,7 +1604,20 @@ Datastore.prototype.findOne = function (query, projection, callback) {
  *                 options.multi If true, can update multiple documents (defaults to false)
  *                 options.upsert If true, document is inserted if the query doesn't match anything
  *                 options.returnUpdatedDocs Defaults to false, if true return as third argument the array of updated matched documents (even if no change actually took place)
- * @param {Function} cb Optional callback, signature: err, numReplaced, upsert (set to true if the update was in fact an upsert)
+ * @param {Function} cb Optional callback, signature: (err, numAffected, affectedDocuments, upsert)
+ *                      If update was an upsert, upsert flag is set to true
+ *                      affectedDocuments can be one of the following:
+ *                        * For an upsert, the upserted document
+ *                        * For an update with returnUpdatedDocs option false, null
+ *                        * For an update with returnUpdatedDocs true and multi false, the updated document
+ *                        * For an update with returnUpdatedDocs true and multi true, the array of updated documents
+ *
+ * WARNING: The API was changed between v1.7.4 and v1.8, for consistency and readability reasons. Prior and including to v1.7.4,
+ *          the callback signature was (err, numAffected, updated) where updated was the updated document in case of an upsert
+ *          or the array of updated documents for an update if the returnUpdatedDocs option was true. That meant that the type of
+ *          affectedDocuments in a non multi update depended on whether there was an upsert or not, leaving only two ways for the
+ *          user to check whether an upsert had occured: checking the type of affectedDocuments or running another find query on
+ *          the whole dataset to check its size. Both options being ugly, the breaking change was necessary.
  *
  * @api private Use Datastore.update which has the same signature
  */
@@ -1579,54 +1663,60 @@ Datastore.prototype._update = function (query, updateQuery, options, cb) {
 
         return self._insert(toBeInserted, function (err, newDoc) {
           if (err) { return callback(err); }
-          return callback(null, 1, newDoc);
+          return callback(null, 1, newDoc, true);
         });
       }
     });
   }
   , function () {   // Perform the update
-    var modifiedDoc
-      , candidates = self.getCandidates(query)
-      , modifications = []
-      ;
+    var modifiedDoc , modifications = [], createdAt;
 
-    // Preparing update (if an error is thrown here neither the datafile nor
-    // the in-memory indexes are affected)
-    try {
-      for (i = 0; i < candidates.length; i += 1) {
-        if (model.match(candidates[i], query) && (multi || numReplaced === 0)) {
-          numReplaced += 1;
-          modifiedDoc = model.modify(candidates[i], updateQuery);
-          if (self.timestampData) { modifiedDoc.updatedAt = new Date(); }
-          modifications.push({ oldDoc: candidates[i], newDoc: modifiedDoc });
-        }
-      }
-    } catch (err) {
-      return callback(err);
-    }
-
-    // Change the docs in memory
-    try {
-        self.updateIndexes(modifications);
-    } catch (err) {
-      return callback(err);
-    }
-
-    // Update the datafile
-    var updatedDocs = _.pluck(modifications, 'newDoc');
-    self.persistence.persistNewState(updatedDocs, function (err) {
+    self.getCandidates(query, function (err, candidates) {
       if (err) { return callback(err); }
-      if (!options.returnUpdatedDocs) {
-        return callback(null, numReplaced);
-      } else {
-        var updatedDocsDC = [];
-        updatedDocs.forEach(function (doc) { updatedDocsDC.push(model.deepCopy(doc)); });
-        return callback(null, numReplaced, updatedDocsDC);
+
+      // Preparing update (if an error is thrown here neither the datafile nor
+      // the in-memory indexes are affected)
+      try {
+        for (i = 0; i < candidates.length; i += 1) {
+          if (model.match(candidates[i], query) && (multi || numReplaced === 0)) {
+            numReplaced += 1;
+            if (self.timestampData) { createdAt = candidates[i].createdAt; }
+            modifiedDoc = model.modify(candidates[i], updateQuery);
+            if (self.timestampData) {
+              modifiedDoc.createdAt = createdAt;
+              modifiedDoc.updatedAt = new Date();
+            }
+            modifications.push({ oldDoc: candidates[i], newDoc: modifiedDoc });
+          }
+        }
+      } catch (err) {
+        return callback(err);
       }
+
+      // Change the docs in memory
+      try {
+        self.updateIndexes(modifications);
+      } catch (err) {
+        return callback(err);
+      }
+
+      // Update the datafile
+      var updatedDocs = _.pluck(modifications, 'newDoc');
+      self.persistence.persistNewState(updatedDocs, function (err) {
+        if (err) { return callback(err); }
+        if (!options.returnUpdatedDocs) {
+          return callback(null, numReplaced);
+        } else {
+          var updatedDocsDC = [];
+          updatedDocs.forEach(function (doc) { updatedDocsDC.push(model.deepCopy(doc)); });
+          if (! multi) { updatedDocsDC = updatedDocsDC[0]; }
+          return callback(null, numReplaced, updatedDocsDC);
+        }
+      });
     });
-  }
-  ]);
+  }]);
 };
+
 Datastore.prototype.update = function () {
   this.executor.push({ this: this, fn: this._update, arguments: arguments });
 };
@@ -1644,44 +1734,42 @@ Datastore.prototype.update = function () {
  */
 Datastore.prototype._remove = function (query, options, cb) {
   var callback
-    , self = this
-    , numRemoved = 0
-    , multi
-    , removedDocs = []
-    , candidates = this.getCandidates(query)
+    , self = this, numRemoved = 0, removedDocs = [], multi
     ;
 
   if (typeof options === 'function') { cb = options; options = {}; }
   callback = cb || function () {};
   multi = options.multi !== undefined ? options.multi : false;
 
-  try {
-    candidates.forEach(function (d) {
-      if (model.match(d, query) && (multi || numRemoved === 0)) {
-        numRemoved += 1;
-        removedDocs.push({ $$deleted: true, _id: d._id });
-        self.removeFromIndexes(d);
-      }
-    });
-  } catch (err) { return callback(err); }
-
-  self.persistence.persistNewState(removedDocs, function (err) {
+  this.getCandidates(query, true, function (err, candidates) {
     if (err) { return callback(err); }
-    return callback(null, numRemoved);
+
+    try {
+      candidates.forEach(function (d) {
+        if (model.match(d, query) && (multi || numRemoved === 0)) {
+          numRemoved += 1;
+          removedDocs.push({ $$deleted: true, _id: d._id });
+          self.removeFromIndexes(d);
+        }
+      });
+    } catch (err) { return callback(err); }
+
+    self.persistence.persistNewState(removedDocs, function (err) {
+      if (err) { return callback(err); }
+      return callback(null, numRemoved);
+    });
   });
 };
+
 Datastore.prototype.remove = function () {
   this.executor.push({ this: this, fn: this._remove, arguments: arguments });
 };
 
 
 
-
-
-
 module.exports = Datastore;
 
-},{"./cursor":5,"./customUtils":6,"./executor":8,"./indexes":9,"./model":10,"./persistence":11,"async":13,"underscore":19,"util":3}],8:[function(require,module,exports){
+},{"./cursor":5,"./customUtils":6,"./executor":8,"./indexes":9,"./model":10,"./persistence":11,"async":13,"events":1,"underscore":19,"util":3}],8:[function(require,module,exports){
 var process=require("__browserify_process");/**
  * Responsible for sequentially executing actions on the database
  */
@@ -1695,17 +1783,16 @@ function Executor () {
 
   // This queue will execute all commands, one-by-one in order
   this.queue = async.queue(function (task, cb) {
-    var callback
-      , lastArg = task.arguments[task.arguments.length - 1]
-      , i, newArguments = []
-      ;
+    var newArguments = [];
 
     // task.arguments is an array-like object on which adding a new field doesn't work, so we transform it into a real array
-    for (i = 0; i < task.arguments.length; i += 1) { newArguments.push(task.arguments[i]); }
+    for (var i = 0; i < task.arguments.length; i += 1) { newArguments.push(task.arguments[i]); }
+    var lastArg = task.arguments[task.arguments.length - 1];
 
     // Always tell the queue task is complete. Execute callback if any was given.
     if (typeof lastArg === 'function') {
-      callback = function () {
+      // Callback was supplied
+      newArguments[newArguments.length - 1] = function () {
         if (typeof setImmediate === 'function') {
            setImmediate(cb);
         } else {
@@ -1713,11 +1800,12 @@ function Executor () {
         }
         lastArg.apply(null, arguments);
       };
-
-      newArguments[newArguments.length - 1] = callback;
+    } else if (!lastArg && task.arguments.length !== 0) {
+      // false/undefined/null supplied as callbback
+      newArguments[newArguments.length - 1] = function () { cb(); };
     } else {
-      callback = function () { cb(); };
-      newArguments.push(callback);
+      // Nothing supplied as callback
+      newArguments.push(function () { cb(); });
     }
 
 
@@ -1732,7 +1820,8 @@ function Executor () {
  * @param {Object} task
  *                 task.this - Object to use as this
  *                 task.fn - Function to execute
- *                 task.arguments - Array of arguments
+ *                 task.arguments - Array of arguments, IMPORTANT: only the last argument may be a function (the callback)
+ *                                                                 and the last argument cannot be false/undefined/null
  * @param {Boolean} forceQueuing Optional (defaults to false) force executor to queue task even if it is not ready
  */
 Executor.prototype.push = function (task, forceQueuing) {
@@ -1851,12 +1940,12 @@ Index.prototype.insert = function (doc) {
         break;
       }
     }
-    
+
     if (error) {
       for (i = 0; i < failingI; i += 1) {
         this.tree.delete(keys[i], doc);
       }
-      
+
       throw error;
     }
   }
@@ -2242,9 +2331,12 @@ function compareArrays (a, b) {
  * In the case of objects and arrays, we deep-compare
  * If two objects dont have the same type, the (arbitrary) type hierarchy is: undefined, null, number, strings, boolean, dates, arrays, objects
  * Return -1 if a < b, 1 if a > b and 0 if a = b (note that equality here is NOT the same as defined in areThingsEqual!)
+ *
+ * @param {Function} _compareStrings String comparing function, returning -1, 0 or 1, overriding default string comparison (useful for languages with accented letters)
  */
-function compareThings (a, b) {
-  var aKeys, bKeys, comp, i;
+function compareThings (a, b, _compareStrings) {
+  var aKeys, bKeys, comp, i
+    , compareStrings = _compareStrings || compareNSB;
 
   // undefined
   if (a === undefined) { return b === undefined ? 0 : -1; }
@@ -2259,8 +2351,8 @@ function compareThings (a, b) {
   if (typeof b === 'number') { return typeof a === 'number' ? compareNSB(a, b) : 1; }
 
   // Strings
-  if (typeof a === 'string') { return typeof b === 'string' ? compareNSB(a, b) : -1; }
-  if (typeof b === 'string') { return typeof a === 'string' ? compareNSB(a, b) : 1; }
+  if (typeof a === 'string') { return typeof b === 'string' ? compareStrings(a, b) : -1; }
+  if (typeof b === 'string') { return typeof a === 'string' ? compareStrings(a, b) : 1; }
 
   // Booleans
   if (typeof a === 'boolean') { return typeof b === 'boolean' ? compareNSB(a, b) : -1; }
@@ -2320,6 +2412,9 @@ lastStepModifierFunctions.$unset = function (obj, field, value) {
 
 /**
  * Push an element to the end of an array field
+ * Optional modifier $each instead of value to push several values
+ * Optional modifier $slice to slice the resulting array, see https://docs.mongodb.org/manual/reference/operator/update/slice/
+ * Différeence with MongoDB: if $slice is specified and not $each, we act as if value is an empty array
  */
 lastStepModifierFunctions.$push = function (obj, field, value) {
   // Create the array if it doesn't exist
@@ -2327,13 +2422,33 @@ lastStepModifierFunctions.$push = function (obj, field, value) {
 
   if (!util.isArray(obj[field])) { throw new Error("Can't $push an element on non-array values"); }
 
+  if (value !== null && typeof value === 'object' && value.$slice && value.$each === undefined) {
+    value.$each = [];
+  }
+
   if (value !== null && typeof value === 'object' && value.$each) {
-    if (Object.keys(value).length > 1) { throw new Error("Can't use another field in conjunction with $each"); }
+    if (Object.keys(value).length >= 3 || (Object.keys(value).length === 2 && value.$slice === undefined)) { throw new Error("Can only use $slice in cunjunction with $each when $push to array"); }
     if (!util.isArray(value.$each)) { throw new Error("$each requires an array value"); }
 
     value.$each.forEach(function (v) {
       obj[field].push(v);
     });
+
+    if (value.$slice === undefined || typeof value.$slice !== 'number') { return; }
+
+    if (value.$slice === 0) {
+      obj[field] = [];
+    } else {
+      var start, end, n = obj[field].length;
+      if (value.$slice < 0) {
+        start = Math.max(0, n + value.$slice);
+        end = n;
+      } else if (value.$slice > 0) {
+        start = 0;
+        end = Math.min(n, value.$slice);
+      }
+      obj[field] = obj[field].slice(start, end);
+    }
   } else {
     obj[field].push(value);
   }
@@ -2419,6 +2534,28 @@ lastStepModifierFunctions.$inc = function (obj, field, value) {
   }
 };
 
+/**
+ * Updates the value of the field, only if specified field is greater than the current value of the field
+ */
+lastStepModifierFunctions.$max = function (obj, field, value) {
+  if (typeof obj[field] === 'undefined') {
+    obj[field] = value;
+  } else if (value > obj[field]) {
+    obj[field] = value;
+  }
+};
+
+/**
+ * Updates the value of the field, only if specified field is smaller than the current value of the field
+ */
+lastStepModifierFunctions.$min = function (obj, field, value) {
+  if (typeof obj[field] === 'undefined') { 
+    obj[field] = value;
+  } else if (value < obj[field]) {
+    obj[field] = value;
+  }
+};
+
 // Given its name, create the complete modifier function
 function createModifierFunction (modifier) {
   return function (obj, field, value) {
@@ -2427,7 +2564,10 @@ function createModifierFunction (modifier) {
     if (fieldParts.length === 1) {
       lastStepModifierFunctions[modifier](obj, field, value);
     } else {
-      obj[fieldParts[0]] = obj[fieldParts[0]] || {};
+      if (obj[fieldParts[0]] === undefined) {
+        if (modifier === '$unset') { return; }   // Bad looking specific fix, needs to be generalized modifiers that behave like $unset are implemented
+        obj[fieldParts[0]] = {};
+      }
       modifierFunctions[modifier](obj[fieldParts[0]], fieldParts.slice(1), value);
     }
   };
@@ -2468,7 +2608,7 @@ function modify (obj, updateQuery) {
 
       if (!modifierFunctions[m]) { throw new Error("Unknown modifier " + m); }
 
-      // Can't rely on Object.keys throwing on non objects since ES6{
+      // Can't rely on Object.keys throwing on non objects since ES6
       // Not 100% satisfying as non objects can be interpreted as objects but no false negatives so we can live with it
       if (typeof updateQuery[m] !== 'object') {
         throw new Error("Modifier " + m + "'s argument must be an object");
@@ -2545,7 +2685,7 @@ function areThingsEqual (a, b) {
 
   // Arrays (no match since arrays are used as a $in)
   // undefined (no match since they mean field doesn't exist and can't be serialized)
-  if (util.isArray(a) || util.isArray(b) || a === undefined || b === undefined) { return false; }
+  if ((!(util.isArray(a) && util.isArray(b)) && (util.isArray(a) || util.isArray(b))) || a === undefined || b === undefined) { return false; }
 
   // General objects (check for deep equality)
   // a and b should be objects at this point
@@ -2655,7 +2795,20 @@ comparisonFunctions.$size = function (obj, value) {
 
     return (obj.length == value);
 };
+comparisonFunctions.$elemMatch = function (obj, value) {
+  if (!util.isArray(obj)) { return false; }
+  var i = obj.length;
+  var result = false;   // Initialize result
+  while (i--) {
+    if (match(obj[i], value)) {   // If match for array element, return true
+      result = true;
+      break;
+    }
+  }
+  return result;
+};
 arrayComparisonFunctions.$size = true;
+arrayComparisonFunctions.$elemMatch = true;
 
 
 /**
@@ -2764,6 +2917,11 @@ function matchQueryPart (obj, queryKey, queryValue, treatObjAsValue) {
 
   // Check if the value is an array if we don't force a treatment as value
   if (util.isArray(objValue) && !treatObjAsValue) {
+    // If the queryValue is an array, try to perform an exact match
+    if (util.isArray(queryValue)) {
+      return matchQueryPart(obj, queryKey, queryValue, true);
+    }
+
     // Check if we are using an array-specific comparison function
     if (queryValue !== null && typeof queryValue === 'object' && !util.isRegExp(queryValue)) {
       keys = Object.keys(queryValue);
@@ -2781,7 +2939,7 @@ function matchQueryPart (obj, queryKey, queryValue, treatObjAsValue) {
 
   // queryValue is an actual object. Determine whether it contains comparison operators
   // or only normal fields. Mixed objects are not allowed
-  if (queryValue !== null && typeof queryValue === 'object' && !util.isRegExp(queryValue)) {
+  if (queryValue !== null && typeof queryValue === 'object' && !util.isRegExp(queryValue) && !util.isArray(queryValue)) {
     keys = Object.keys(queryValue);
     firstChars = _.map(keys, function (item) { return item[0]; });
     dollarFirstChars = _.filter(firstChars, function (c) { return c === '$'; });
@@ -2960,7 +3118,11 @@ Persistence.prototype.persistCachedDatabase = function (cb) {
     }
   });
 
-  storage.crashSafeWriteFile(this.filename, toPersist, callback);
+  storage.crashSafeWriteFile(this.filename, toPersist, function (err) {
+    if (err) { return callback(err); }
+    self.db.emit('compaction.done');
+    return callback(null);
+  });
 };
 
 
