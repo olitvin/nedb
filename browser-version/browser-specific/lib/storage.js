@@ -13,6 +13,7 @@ localforage.config({
   name: 'NeDB'
 , storeName: 'nedbdata'
 });
+var noSerialize = false;
 
 
 function exists (filename, callback) {
@@ -50,9 +51,14 @@ function appendFile (filename, toAppend, options, callback) {
   // Options do not matter in browser setup
   if (typeof options === 'function') { callback = options; }
 
-  localforage.getItem(filename, function (err, contents) {
-    contents = contents || '';
-    contents += toAppend;
+  localforage.getItem(filename, function (err, contents) {    
+    if (noSerialize) {
+        contents = contents || []; 
+        contents = contents.concat(toAppend);
+    } else {
+        contents = contents || ''; 
+        contents += toAppend;
+    }
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }
@@ -81,6 +87,9 @@ function ensureDatafileIntegrity (filename, callback) {
   return callback(null);
 }
 
+function setNoSerialize(status) {
+    noSerialize = status;
+}
 
 // Interface
 module.exports.exists = exists;
@@ -92,4 +101,5 @@ module.exports.readFile = readFile;
 module.exports.unlink = unlink;
 module.exports.mkdirp = mkdirp;
 module.exports.ensureDatafileIntegrity = ensureDatafileIntegrity;
-
+module.exports.forage = localforage;
+module.exports.setNoSerialize = setNoSerialize;

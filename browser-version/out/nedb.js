@@ -2998,7 +2998,20 @@ var storage = require('./storage')
   , Index = require('./indexes')
   ;
 
-
+if (storage.forage && storage.forage.supports('asyncStorage')) {   
+    model.serialize = function(d) {return d;};
+    oldDeserialize = model.deserialize;
+    model.deserialize = function(d) {
+        if (typeof(d) == 'string') {
+            return oldDeserialize(d);
+        }
+        return d;
+    };
+    if (storage) {
+        model.noSerialize = true;
+        storage.setNoSerialize(true);
+    }
+}
 /**
  * Create a new Persistence object for database options.db
  * @param {Datastore} options.db
@@ -3095,6 +3108,14 @@ Persistence.getNWAppFilename = function (appName, relativeFilename) {
   return path.join(home, 'nedb-data', relativeFilename);
 }
 
+Persistence.prototype.addToPersist = function(persist, data) {
+    if (model.noSerialize) {
+        persist.push(data);
+    } else {
+        persist += data + '\n';
+    }
+    return persist;
+};
 
 /**
  * Persist cached database
@@ -3108,16 +3129,18 @@ Persistence.prototype.persistCachedDatabase = function (cb) {
     , self = this;
 
   if (this.inMemoryOnly) { return callback(null); }
-
+  if (!!model.noSerialize) {
+    toPersist = [];
+  }
   this.db.getAllData().forEach(function (doc) {
-    toPersist += self.afterSerialization(model.serialize(doc)) + '\n';
+    toPersist = self.addToPersist(toPersist, self.afterSerialization(model.serialize(doc)));
   });
   Object.keys(this.db.indexes).forEach(function (fieldName) {
     if (fieldName != "_id") {   // The special _id index is managed by datastore.js, the others need to be persisted
-      toPersist += self.afterSerialization(model.serialize({ $$indexCreated: { fieldName: fieldName, unique: self.db.indexes[fieldName].unique, sparse: self.db.indexes[fieldName].sparse }})) + '\n';
+      toPersist = self.addToPersist(toPersist, self.afterSerialization(model.serialize({ $$indexCreated: { fieldName: fieldName, unique: self.db.indexes[fieldName].unique, sparse: self.db.indexes[fieldName].sparse }})));
     }
   });
-
+  
   storage.crashSafeWriteFile(this.filename, toPersist, function (err) {
     if (err) { return callback(err); }
     self.db.emit('compaction.done');
@@ -3174,9 +3197,12 @@ Persistence.prototype.persistNewState = function (newDocs, cb) {
 
   // In-memory only datastore
   if (self.inMemoryOnly) { return callback(null); }
+  if (!!model.noSerialize) {
+    toPersist = [];
+  }
 
-  newDocs.forEach(function (doc) {
-    toPersist += self.afterSerialization(model.serialize(doc)) + '\n';
+  newDocs.forEach(function (doc) {    
+    toPersist = self.addToPersist(toPersist, self.afterSerialization(model.serialize(doc)));
   });
 
   if (toPersist.length === 0) { return callback(null); }
@@ -3186,13 +3212,28 @@ Persistence.prototype.persistNewState = function (newDocs, cb) {
   });
 };
 
+Persistence.prototype.split = function (data) {
+    if (model.noSerialize) {
+        if (typeof(data) == 'string') {
+            return data.split('\n');
+        }
+
+        return data;
+    }
+
+    if (typeof(data) == 'string') {
+        return data.split('\n');
+    }
+
+    return data;
+};
 
 /**
  * From a database's raw data, return the corresponding
  * machine understandable collection
  */
 Persistence.prototype.treatRawData = function (rawData) {
-  var data = rawData.split('\n')
+  var data = this.split(rawData)
     , dataById = {}
     , tdata = []
     , i
@@ -3313,6 +3354,7 @@ localforage.config({
   name: 'NeDB'
 , storeName: 'nedbdata'
 });
+var noSerialize = false;
 
 
 function exists (filename, callback) {
@@ -3350,9 +3392,14 @@ function appendFile (filename, toAppend, options, callback) {
   // Options do not matter in browser setup
   if (typeof options === 'function') { callback = options; }
 
-  localforage.getItem(filename, function (err, contents) {
-    contents = contents || '';
-    contents += toAppend;
+  localforage.getItem(filename, function (err, contents) {    
+    if (noSerialize) {
+        contents = contents || []; 
+        contents = contents.concat(toAppend);
+    } else {
+        contents = contents || ''; 
+        contents += toAppend;
+    }
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }
@@ -3381,6 +3428,9 @@ function ensureDatafileIntegrity (filename, callback) {
   return callback(null);
 }
 
+function setNoSerialize(status) {
+    noSerialize = status;
+}
 
 // Interface
 module.exports.exists = exists;
@@ -3392,8 +3442,8 @@ module.exports.readFile = readFile;
 module.exports.unlink = unlink;
 module.exports.mkdirp = mkdirp;
 module.exports.ensureDatafileIntegrity = ensureDatafileIntegrity;
-
-
+module.exports.forage = localforage;
+module.exports.setNoSerialize = setNoSerialize;
 },{"localforage":18}],13:[function(require,module,exports){
 var process=require("__browserify_process");/*global setImmediate: false, setTimeout: false, console: false */
 (function () {
