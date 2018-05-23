@@ -1410,7 +1410,7 @@ Datastore.prototype._insert = function (newDoc, cb) {
     ;
 
   try {
-    preparedDoc = this.prepareDocumentForInsertion(newDoc)
+    preparedDoc = this.prepareDocumentForInsertion(newDoc);
     this._insertInCache(preparedDoc);
   } catch (e) {
     return callback(e);
@@ -1445,7 +1445,7 @@ Datastore.prototype.prepareDocumentForInsertion = function (newDoc) {
   if (util.isArray(newDoc)) {
     preparedDoc = [];
     newDoc.forEach(function (doc) { preparedDoc.push(self.prepareDocumentForInsertion(doc)); });
-  } else {
+  } else {    
     preparedDoc = model.deepCopy(newDoc);
     if (preparedDoc._id === undefined) { preparedDoc._id = this.createNewId(); }
     var now = new Date();
@@ -2272,6 +2272,24 @@ function deepCopy (obj, strictKeys) {
   }
 
   if (typeof obj === 'object') {
+    var toString = Object.prototype.toString;
+    switch(toString.call(obj)) {
+        case '[object Blob]':
+        case '[object ArrayBuffer]':
+        case '[object Int8Array]':
+        case '[object Uint8Array]':
+        case '[object Uint8ClampedArray]':
+        case '[object Int16Array]':
+        case '[object Uint16Array]':
+        case '[object Int32Array]':
+        case '[object Uint32Array]':
+        case '[object Float32Array]':
+        case '[object Float64Array]':
+        {
+            return obj;
+        }
+        break;
+    }
     res = {};
     Object.keys(obj).forEach(function (k) {
       if (!strictKeys || (k[0] !== '$' && k.indexOf('.') === -1)) {
@@ -3201,10 +3219,10 @@ Persistence.prototype.persistNewState = function (newDocs, cb) {
     toPersist = [];
   }
 
-  newDocs.forEach(function (doc) {    
+  newDocs.forEach(function (doc) {
     toPersist = self.addToPersist(toPersist, self.afterSerialization(model.serialize(doc)));
   });
-
+  
   if (toPersist.length === 0) { return callback(null); }
 
   storage.appendFile(self.filename, toPersist, 'utf8', function (err) {
@@ -3399,7 +3417,7 @@ function appendFile (filename, toAppend, options, callback) {
     } else {
         contents = contents || ''; 
         contents += toAppend;
-    }
+    }    
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }

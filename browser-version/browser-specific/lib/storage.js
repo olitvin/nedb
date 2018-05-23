@@ -58,7 +58,7 @@ function appendFile (filename, toAppend, options, callback) {
     } else {
         contents = contents || ''; 
         contents += toAppend;
-    }
+    }    
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }

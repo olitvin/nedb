@@ -1,8 +1,9 @@
 {
   "dependencies": {
     "async": "~0.2.9",
+    "browserify": "~2.25.0",
     "fs-extra": "~0.6.3",
-    "uglify-js": "~2.3.6",
-    "browserify": "~2.25.0"
+    "localforage": "^1.7.1",
+    "uglify-js": "~2.3.6"
   }
 }
