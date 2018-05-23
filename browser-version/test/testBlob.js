@@ -6,11 +6,7 @@ function testsFailed () {
 }
 
 var filename = 'blob';
-var store = localforage.createInstance({
-  name: 'test',
-  storeName: 'blobs'
-});
-var item = { hello: 'world', _id: '1' };
+var item = { hello: 'world', _id: '24353b4' };
 
 var db = new Nedb({ filename: filename, autoload: true });
 
@@ -32,14 +28,7 @@ function loadXHR (url) {
 loadXHR('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOCi1uZzynmYhuAbLg6YLVENsiNI6uTpqpBU9EqTerEPbUrgij')
   .then(function (b) {
     item.blob = b;
-    store.setItem(item._id, item)
-      .then(function (r) {
-        console.log(r);
-      })
-      .catch(function (e) {
-        console.error(e);
-      });
-
+    item.timestamp = new Date().getTime();
     db.update({_id: item._id}, item, { upsert: true }, function (err) {
       if (err) {
         console.log(err);

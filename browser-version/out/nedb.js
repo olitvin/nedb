@@ -1989,7 +1989,6 @@ Index.prototype.insertMultipleDocs = function (docs) {
  */
 Index.prototype.remove = function (doc) {
   var key, self = this;
-
   if (util.isArray(doc)) { doc.forEach(function (d) { self.remove(d); }); return; }
 
   key = model.getDotValue(doc, this.fieldName);
@@ -1997,7 +1996,9 @@ Index.prototype.remove = function (doc) {
   if (key === undefined && this.sparse) { return; }
 
   if (!util.isArray(key)) {
+    console.log('-------->>>>>>>>', this.tree);
     this.tree.delete(key, doc);
+    console.log('--------<<<<<', this.tree);
   } else {
     _.uniq(key, projectForUnique).forEach(function (_key) {
       self.tree.delete(_key, doc);
@@ -3016,20 +3017,20 @@ var storage = require('./storage')
   , Index = require('./indexes')
   ;
 
-if (storage.forage && storage.forage.supports('asyncStorage')) {   
-    model.serialize = function(d) {return d;};
-    oldDeserialize = model.deserialize;
-    model.deserialize = function(d) {
-        if (typeof(d) == 'string') {
-            return oldDeserialize(d);
-        }
-        return d;
-    };
-    if (storage) {
-        model.noSerialize = true;
-        storage.setNoSerialize(true);
-    }
-}
+// if (storage.forage && storage.forage.supports('asyncStorage')) {   
+//     model.serialize = function(d) {return d;};
+//     oldDeserialize = model.deserialize;
+//     model.deserialize = function(d) {
+//         if (typeof(d) == 'string') {
+//             return oldDeserialize(d);
+//         }
+//         return d;
+//     };
+//     if (storage) {
+//         model.noSerialize = true;
+//         storage.setNoSerialize(true);
+//     }
+// }
 /**
  * Create a new Persistence object for database options.db
  * @param {Datastore} options.db
