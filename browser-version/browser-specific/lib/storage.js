@@ -50,10 +50,37 @@ function writeFile (filename, contents, options, callback) {
 function appendFile (filename, toAppend, options, callback) {
   // Options do not matter in browser setup
   if (typeof options === 'function') { callback = options; }
-
-  localforage.getItem(filename, function (err, contents) {    
+  
+  localforage.getItem(filename, function (err, contents) {
     if (noSerialize) {
-        contents = contents || []; 
+        contents = contents || [];
+        if (contents.length && options && options.indexes) {
+            var keys = Object.keys(options.indexes);
+            var values = {};
+            toAppend.forEach(function(val) {                
+                keys.forEach(function(key) {
+                    if (!values[key]) {
+                        values[key] = [];
+                    }
+                    values[key].push(val[key]);
+                });
+            });
+            contents = contents.filter(function(value) {
+                if (!value) {
+                    return false;
+                }
+                var detected = false;
+                keys.some(function(key) {
+                    if (values[key].indexOf(value[key]) != -1) {
+                        detected = true;
+                        return true;
+                    }
+                });
+                if (!detected) {
+                    return true;
+                }                
+            });
+        }
         contents = contents.concat(toAppend);
     } else {
         contents = contents || ''; 

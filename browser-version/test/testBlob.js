@@ -6,7 +6,7 @@ function testsFailed () {
 }
 
 var filename = 'blob';
-var item = { hello: 'world', _id: '24353b4' };
+var item = { hello: 'world', _id: '14355' };
 
 var db = new Nedb({ filename: filename, autoload: true });
 

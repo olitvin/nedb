@@ -1996,9 +1996,7 @@ Index.prototype.remove = function (doc) {
   if (key === undefined && this.sparse) { return; }
 
   if (!util.isArray(key)) {
-    console.log('-------->>>>>>>>', this.tree);
     this.tree.delete(key, doc);
-    console.log('--------<<<<<', this.tree);
   } else {
     _.uniq(key, projectForUnique).forEach(function (_key) {
       self.tree.delete(_key, doc);
@@ -3017,20 +3015,20 @@ var storage = require('./storage')
   , Index = require('./indexes')
   ;
 
-// if (storage.forage && storage.forage.supports('asyncStorage')) {   
-//     model.serialize = function(d) {return d;};
-//     oldDeserialize = model.deserialize;
-//     model.deserialize = function(d) {
-//         if (typeof(d) == 'string') {
-//             return oldDeserialize(d);
-//         }
-//         return d;
-//     };
-//     if (storage) {
-//         model.noSerialize = true;
-//         storage.setNoSerialize(true);
-//     }
-// }
+if (storage.forage && storage.forage.supports('asyncStorage')) {   
+    model.serialize = function(d) {return d;};
+    oldDeserialize = model.deserialize;
+    model.deserialize = function(d) {
+        if (typeof(d) == 'string') {
+            return oldDeserialize(d);
+        }
+        return d;
+    };
+    if (storage) {
+        model.noSerialize = true;
+        storage.setNoSerialize(true);
+    }
+}
 /**
  * Create a new Persistence object for database options.db
  * @param {Datastore} options.db
@@ -3225,8 +3223,8 @@ Persistence.prototype.persistNewState = function (newDocs, cb) {
   });
   
   if (toPersist.length === 0) { return callback(null); }
-
-  storage.appendFile(self.filename, toPersist, 'utf8', function (err) {
+  
+  storage.appendFile(self.filename, toPersist, {indexes: this.db.indexes, encode: 'utf8'}, function (err) {
     return callback(err);
   });
 };
@@ -3410,10 +3408,37 @@ function writeFile (filename, contents, options, callback) {
 function appendFile (filename, toAppend, options, callback) {
   // Options do not matter in browser setup
   if (typeof options === 'function') { callback = options; }
-
-  localforage.getItem(filename, function (err, contents) {    
+  
+  localforage.getItem(filename, function (err, contents) {
     if (noSerialize) {
-        contents = contents || []; 
+        contents = contents || [];
+        if (contents.length && options && options.indexes) {
+            var keys = Object.keys(options.indexes);
+            var values = {};
+            toAppend.forEach(function(val) {                
+                keys.forEach(function(key) {
+                    if (!values[key]) {
+                        values[key] = [];
+                    }
+                    values[key].push(val[key]);
+                });
+            });
+            contents = contents.filter(function(value) {
+                if (!value) {
+                    return false;
+                }
+                var detected = false;
+                keys.some(function(key) {
+                    if (values[key].indexOf(value[key]) != -1) {
+                        detected = true;
+                        return true;
+                    }
+                });
+                if (!detected) {
+                    return true;
+                }                
+            });
+        }
         contents = contents.concat(toAppend);
     } else {
         contents = contents || ''; 
