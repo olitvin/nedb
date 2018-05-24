@@ -2274,6 +2274,14 @@ function deepCopy (obj, strictKeys) {
     var toString = Object.prototype.toString;
     switch(toString.call(obj)) {
         case '[object Blob]':
+        {
+            return new Blob([obj], {type: obj.type, size: obj.size});
+        }
+        break;
+        case '[object File]':
+        {
+            return new File([obj], obj.name, {type: obj.type, size: obj.size});
+        }
         case '[object ArrayBuffer]':
         case '[object Int8Array]':
         case '[object Uint8Array]':
@@ -2298,7 +2306,7 @@ function deepCopy (obj, strictKeys) {
     return res;
   }
 
-  return undefined;   // For now everything else is undefined. We should probably throw an error instead
+  return obj;   // For now everything else is undefined. We should probably throw an error instead
 }
 
 

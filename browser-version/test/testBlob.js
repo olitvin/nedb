@@ -25,9 +25,18 @@ function loadXHR (url) {
   });
 }
 
+db.find({}, function(err, res) {
+    console.log(res);
+    var img = document.createElement("img");
+    img.src = URL.createObjectURL(res[0].blob);
+    img.id = "picture_";
+    document.body.appendChild(img);
+
+    console.log(err, res);
+  });
 loadXHR('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOCi1uZzynmYhuAbLg6YLVENsiNI6uTpqpBU9EqTerEPbUrgij')
   .then(function (b) {
-    item.blob = b;
+    item.blob = new File([b], "test", {type: b.type});
     item.timestamp = new Date().getTime();
     db.update({_id: item._id}, item, { upsert: true }, function (err) {
       if (err) {
@@ -35,5 +44,14 @@ loadXHR('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOCi1uZzynmYhuAbL
         testsFailed();
         return;
       }
+
+      db.find({}, function(err, res) {        
+        var img=document.createElement("img");
+        img.src=(window.webkitURL ? webkitURL : URL).createObjectURL(res[0].blob);
+        img.id="picture";
+        document.body.appendChild(img);
+
+        console.log(err, res);
+      })
     });
   });
