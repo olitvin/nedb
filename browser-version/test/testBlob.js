@@ -36,7 +36,7 @@ db.find({}, function(err, res) {
   });
 loadXHR('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOCi1uZzynmYhuAbLg6YLVENsiNI6uTpqpBU9EqTerEPbUrgij')
   .then(function (b) {
-    item.blob = new File([b], "test", {type: b.type});
+    item.blob = new Blob([b], {type: b.type});
     item.timestamp = new Date().getTime();
     db.update({_id: item._id}, item, { upsert: true }, function (err) {
       if (err) {

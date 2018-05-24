@@ -2214,22 +2214,7 @@ function checkObject (obj) {
  * Accepted secondary types: Objects, Arrays
  */
 function serialize (obj) {
-  var res;
-
-  res = JSON.stringify(obj, function (k, v) {
-    checkKey(k, v);
-
-    if (v === undefined) { return undefined; }
-    if (v === null) { return null; }
-
-    // Hackish way of checking if object is Date (this way it works between execution contexts in node-webkit).
-    // We can't use value directly because for dates it is already string in this function (date.toJSON was already called), so we use this
-    if (typeof this[k].getTime === 'function') { return { $$date: this[k].getTime() }; }
-
-    return v;
-  });
-
-  return res;
+  return obj;
 }
 
 
@@ -2238,13 +2223,7 @@ function serialize (obj) {
  * Return the object itself
  */
 function deserialize (rawData) {
-  return JSON.parse(rawData, function (k, v) {
-    if (k === '$$date') { return new Date(v); }
-    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null) { return v; }
-    if (v && v.$$date) { return v.$$date; }
-
-    return v;
-  });
+  return rawData;
 }
 
 
@@ -3023,20 +3002,6 @@ var storage = require('./storage')
   , Index = require('./indexes')
   ;
 
-if (storage.forage && storage.forage.supports('asyncStorage')) {   
-    model.serialize = function(d) {return d;};
-    oldDeserialize = model.deserialize;
-    model.deserialize = function(d) {
-        if (typeof(d) == 'string') {
-            return oldDeserialize(d);
-        }
-        return d;
-    };
-    if (storage) {
-        model.noSerialize = true;
-        storage.setNoSerialize(true);
-    }
-}
 /**
  * Create a new Persistence object for database options.db
  * @param {Datastore} options.db
@@ -3134,11 +3099,7 @@ Persistence.getNWAppFilename = function (appName, relativeFilename) {
 }
 
 Persistence.prototype.addToPersist = function(persist, data) {
-    if (model.noSerialize) {
-        persist.push(data);
-    } else {
-        persist += data + '\n';
-    }
+    persist.push(data);
     return persist;
 };
 
@@ -3150,13 +3111,11 @@ Persistence.prototype.addToPersist = function(persist, data) {
  */
 Persistence.prototype.persistCachedDatabase = function (cb) {
   var callback = cb || function () {}
-    , toPersist = ''
+    , toPersist = []
     , self = this;
 
   if (this.inMemoryOnly) { return callback(null); }
-  if (!!model.noSerialize) {
-    toPersist = [];
-  }
+
   this.db.getAllData().forEach(function (doc) {
     toPersist = self.addToPersist(toPersist, self.afterSerialization(model.serialize(doc)));
   });
@@ -3216,15 +3175,12 @@ Persistence.prototype.stopAutocompaction = function () {
  */
 Persistence.prototype.persistNewState = function (newDocs, cb) {
   var self = this
-    , toPersist = ''
+    , toPersist = []
     , callback = cb || function () {}
     ;
 
   // In-memory only datastore
   if (self.inMemoryOnly) { return callback(null); }
-  if (!!model.noSerialize) {
-    toPersist = [];
-  }
 
   newDocs.forEach(function (doc) {
     toPersist = self.addToPersist(toPersist, self.afterSerialization(model.serialize(doc)));
@@ -3237,28 +3193,13 @@ Persistence.prototype.persistNewState = function (newDocs, cb) {
   });
 };
 
-Persistence.prototype.split = function (data) {
-    if (model.noSerialize) {
-        if (typeof(data) == 'string') {
-            return data.split('\n');
-        }
-
-        return data;
-    }
-
-    if (typeof(data) == 'string') {
-        return data.split('\n');
-    }
-
-    return data;
-};
 
 /**
  * From a database's raw data, return the corresponding
  * machine understandable collection
  */
 Persistence.prototype.treatRawData = function (rawData) {
-  var data = this.split(rawData)
+  var data = rawData
     , dataById = {}
     , tdata = []
     , i
@@ -3379,7 +3320,6 @@ localforage.config({
   name: 'NeDB'
 , storeName: 'nedbdata'
 });
-var noSerialize = false;
 
 
 function exists (filename, callback) {
@@ -3418,40 +3358,35 @@ function appendFile (filename, toAppend, options, callback) {
   if (typeof options === 'function') { callback = options; }
   
   localforage.getItem(filename, function (err, contents) {
-    if (noSerialize) {
-        contents = contents || [];
-        if (contents.length && options && options.indexes) {
-            var keys = Object.keys(options.indexes);
-            var values = {};
-            toAppend.forEach(function(val) {                
-                keys.forEach(function(key) {
-                    if (!values[key]) {
-                        values[key] = [];
-                    }
-                    values[key].push(val[key]);
-                });
-            });
-            contents = contents.filter(function(value) {
-                if (!value) {
-                    return false;
+    contents = contents || [];
+    if (contents.length && options && options.indexes) {
+        var keys = Object.keys(options.indexes);
+        var values = {};
+        toAppend.forEach(function(val) {                
+            keys.forEach(function(key) {
+                if (!values[key]) {
+                    values[key] = [];
                 }
-                var detected = false;
-                keys.some(function(key) {
-                    if (values[key].indexOf(value[key]) != -1) {
-                        detected = true;
-                        return true;
-                    }
-                });
-                if (!detected) {
-                    return true;
-                }                
+                values[key].push(val[key]);
             });
-        }
-        contents = contents.concat(toAppend);
-    } else {
-        contents = contents || ''; 
-        contents += toAppend;
-    }    
+        });
+        contents = contents.filter(function(value) {
+            if (!value) {
+                return false;
+            }
+            var detected = false;
+            keys.some(function(key) {
+                if (values[key].indexOf(value[key]) != -1) {
+                    detected = true;
+                    return true;
+                }
+            });
+            if (!detected) {
+                return true;
+            }                
+        });
+    }
+    contents = contents.concat(toAppend); 
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }
@@ -3480,9 +3415,6 @@ function ensureDatafileIntegrity (filename, callback) {
   return callback(null);
 }
 
-function setNoSerialize(status) {
-    noSerialize = status;
-}
 
 // Interface
 module.exports.exists = exists;
@@ -3495,7 +3427,6 @@ module.exports.unlink = unlink;
 module.exports.mkdirp = mkdirp;
 module.exports.ensureDatafileIntegrity = ensureDatafileIntegrity;
 module.exports.forage = localforage;
-module.exports.setNoSerialize = setNoSerialize;
 },{"localforage":18}],13:[function(require,module,exports){
 var process=require("__browserify_process");/*global setImmediate: false, setTimeout: false, console: false */
 (function () {

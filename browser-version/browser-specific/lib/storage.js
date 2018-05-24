@@ -13,7 +13,6 @@ localforage.config({
   name: 'NeDB'
 , storeName: 'nedbdata'
 });
-var noSerialize = false;
 
 
 function exists (filename, callback) {
@@ -52,40 +51,35 @@ function appendFile (filename, toAppend, options, callback) {
   if (typeof options === 'function') { callback = options; }
   
   localforage.getItem(filename, function (err, contents) {
-    if (noSerialize) {
-        contents = contents || [];
-        if (contents.length && options && options.indexes) {
-            var keys = Object.keys(options.indexes);
-            var values = {};
-            toAppend.forEach(function(val) {                
-                keys.forEach(function(key) {
-                    if (!values[key]) {
-                        values[key] = [];
-                    }
-                    values[key].push(val[key]);
-                });
-            });
-            contents = contents.filter(function(value) {
-                if (!value) {
-                    return false;
+    contents = contents || [];
+    if (contents.length && options && options.indexes) {
+        var keys = Object.keys(options.indexes);
+        var values = {};
+        toAppend.forEach(function(val) {                
+            keys.forEach(function(key) {
+                if (!values[key]) {
+                    values[key] = [];
                 }
-                var detected = false;
-                keys.some(function(key) {
-                    if (values[key].indexOf(value[key]) != -1) {
-                        detected = true;
-                        return true;
-                    }
-                });
-                if (!detected) {
-                    return true;
-                }                
+                values[key].push(val[key]);
             });
-        }
-        contents = contents.concat(toAppend);
-    } else {
-        contents = contents || ''; 
-        contents += toAppend;
-    }    
+        });
+        contents = contents.filter(function(value) {
+            if (!value) {
+                return false;
+            }
+            var detected = false;
+            keys.some(function(key) {
+                if (values[key].indexOf(value[key]) != -1) {
+                    detected = true;
+                    return true;
+                }
+            });
+            if (!detected) {
+                return true;
+            }                
+        });
+    }
+    contents = contents.concat(toAppend); 
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }
@@ -114,9 +108,6 @@ function ensureDatafileIntegrity (filename, callback) {
   return callback(null);
 }
 
-function setNoSerialize(status) {
-    noSerialize = status;
-}
 
 // Interface
 module.exports.exists = exists;
@@ -129,4 +120,3 @@ module.exports.unlink = unlink;
 module.exports.mkdirp = mkdirp;
 module.exports.ensureDatafileIntegrity = ensureDatafileIntegrity;
 module.exports.forage = localforage;
-module.exports.setNoSerialize = setNoSerialize;
