@@ -254,22 +254,19 @@ describe('Indexing', function () {
     db.insert({ a: 4 }, function () {
       db.insert({ a: 6 }, function () {
         db.insert({ a: 7 }, function () {
-          db.getCandidates({ a: 6 }, function (err, candidates) {
-            console.log(candidates);
-            assert.equal(candidates.length, 3);
-            assert.isDefined(_.find(candidates, function (doc) { return doc.a === 4; }));
-            assert.isDefined(_.find(candidates, function (doc) { return doc.a === 6; }));
-            assert.isDefined(_.find(candidates, function (doc) { return doc.a === 7; }));
+          var candidates = db.getCandidates({ a: 6 })
+          assert.equal(candidates.length, 3);
+          assert.isDefined(_.find(candidates, function (doc) { return doc.a === 4; }));
+          assert.isDefined(_.find(candidates, function (doc) { return doc.a === 6; }));
+          assert.isDefined(_.find(candidates, function (doc) { return doc.a === 7; }));
 
-            db.ensureIndex({ fieldName: 'a' });
+          db.ensureIndex({ fieldName: 'a' });
 
-            db.getCandidates({ a: 6 }, function (err, candidates) {
-              assert.equal(candidates.length, 1);
-              assert.isDefined(_.find(candidates, function (doc) { return doc.a === 6; }));
+          candidates = db.getCandidates({ a: 6 })
+          assert.equal(candidates.length, 1);
+          assert.isDefined(_.find(candidates, function (doc) { return doc.a === 6; }));
 
-              done();
-            });
-          });
+          done();
         });
       });
     });

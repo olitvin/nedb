@@ -49,7 +49,7 @@ function writeFile (filename, contents, options, callback) {
 function appendFile (filename, toAppend, options, callback) {
   // Options do not matter in browser setup
   if (typeof options === 'function') { callback = options; }
-  
+
   localforage.getItem(filename, function (err, contents) {
     contents = contents || [];
     if (contents.length && options && options.indexes) {
