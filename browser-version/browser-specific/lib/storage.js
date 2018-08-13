@@ -6,7 +6,8 @@
  * This version is the browser version
  */
 
-var localforage = require('localforage')
+var localforage = require('localforage'),
+    jsEnv = require('browser-or-node');
 
 // Configure localforage to display NeDB name for now. Would be a good idea to let user use his own app name
 localforage.config({
@@ -51,35 +52,40 @@ function appendFile (filename, toAppend, options, callback) {
   if (typeof options === 'function') { callback = options; }
 
   localforage.getItem(filename, function (err, contents) {
-    contents = contents || [];
-    if (contents.length && options && options.indexes) {
-        var keys = Object.keys(options.indexes);
-        var values = {};
-        toAppend.forEach(function(val) {                
-            keys.forEach(function(key) {
-                if (!values[key]) {
-                    values[key] = [];
-                }
-                values[key].push(val[key]);
+    if (jsEnv.isNode) {
+        contents = contents || '';
+        contents += toAppend;
+    } else {
+        contents = contents || [];
+        if (contents.length && options && options.indexes) {
+            var keys = Object.keys(options.indexes);
+            var values = {};
+            toAppend.forEach(function(val) {                
+                keys.forEach(function(key) {
+                    if (!values[key]) {
+                        values[key] = [];
+                    }
+                    values[key].push(val[key]);
+                });
             });
-        });
-        contents = contents.filter(function(value) {
-            if (!value) {
-                return false;
-            }
-            var detected = false;
-            keys.some(function(key) {
-                if (values[key].indexOf(value[key]) != -1) {
-                    detected = true;
+            contents = contents.filter(function(value) {
+                if (!value) {
+                    return false;
+                }
+                var detected = false;
+                keys.some(function(key) {
+                    if (values[key].indexOf(value[key]) != -1) {
+                        detected = true;
+                        return true;
+                    }
+                });
+                if (!detected) {
                     return true;
                 }
             });
-            if (!detected) {
-                return true;
-            }
-        });
+        }
+        contents = contents.concat(toAppend);
     }
-    contents = contents.concat(toAppend); 
     localforage.setItem(filename, contents, function () { return callback(); });
   });
 }
