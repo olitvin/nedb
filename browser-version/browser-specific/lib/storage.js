@@ -76,7 +76,7 @@ function appendFile (filename, toAppend, options, callback) {
             });
             if (!detected) {
                 return true;
-            }                
+            }
         });
     }
     contents = contents.concat(toAppend); 

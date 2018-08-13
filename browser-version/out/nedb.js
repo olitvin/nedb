@@ -2275,6 +2275,16 @@ function deepCopy (obj, strictKeys) {
             return obj;
         }
         break;
+        case '[object Undefined]':
+        {
+            if (obj instanceof Blob) {
+                return obj;
+            }
+            if (obj instanceof File) {
+                return obj;
+            }
+        }
+        break;
     }
     res = {};
     Object.keys(obj).forEach(function (k) {
@@ -2986,6 +2996,38 @@ module.exports.match = match;
 module.exports.areThingsEqual = areThingsEqual;
 module.exports.compareThings = compareThings;
 
+Object.prototype.toString$tmp = Object.prototype.toString;
+Object.prototype.toString = function (value) {
+    var tmp = this.toString$tmp(value);
+    if (tmp == '[object Undefined]') {
+        if (value instanceof Blob) {
+            return '[object Blob]';
+        } else if (value instanceof File) {
+            return '[object File]';
+        } else if (value instanceof ArrayBuffer) {
+            return '[object ArrayBuffer]';
+        } else if (value instanceof Int8Array) {
+            return '[object Int8Array]';
+        } else if (value instanceof Uint8Array) {
+            return '[object Uint8Array]';
+        } else if (value instanceof Uint8ClampedArray) {
+            return '[object Uint8ClampedArray]';
+        } else if (value instanceof Int16Array) {
+            return '[object Int16Array]';
+        } else if (value instanceof Uint16Array) {
+            return '[object Uint16Array]';
+        } else if (value instanceof Int32Array) {
+            return '[object Int32Array]';
+        } else if (value instanceof Uint32Array) {
+            return '[object Uint32Array]';
+        } else if (value instanceof Float32Array) {
+            return '[object Float32Array]';
+        } else if (value instanceof Float64Array) {
+            return '[object Float64Array]';
+        }
+    }
+    return tmp;
+};
 },{"underscore":19,"util":3}],11:[function(require,module,exports){
 var process=require("__browserify_process");/**
  * Handle every persistence-related task
@@ -3383,7 +3425,7 @@ function appendFile (filename, toAppend, options, callback) {
             });
             if (!detected) {
                 return true;
-            }                
+            }
         });
     }
     contents = contents.concat(toAppend); 

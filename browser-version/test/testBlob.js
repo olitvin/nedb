@@ -38,7 +38,7 @@ loadXHR('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOCi1uZzynmYhuAbL
   .then(function (b) {
     item.blob = new Blob([b], {type: b.type});
     item.timestamp = new Date().getTime();
-    db.update({_id: item._id}, item, { upsert: true }, function (err) {
+    db.update({_id: item._id}, angular.copy(item), { upsert: true }, function (err) {
       if (err) {
         console.log(err);
         testsFailed();
